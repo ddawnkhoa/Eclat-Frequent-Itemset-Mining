@@ -1,4 +1,3 @@
-
 # Tính giao hai TID-set đã được sắp xếp tăng dần
 function tidset_intersection(a::Vector{Int}, b::Vector{Int})
     result = Int[]

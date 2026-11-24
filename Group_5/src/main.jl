@@ -1,12 +1,24 @@
-include("structures.jl")
-include("algorithm/eclat.jl")
-include("data_loader.jl")
-include("output.jl")
+# Nạp các module cần thiết
+include(joinpath(@__DIR__, "structures.jl"))
+include(joinpath(@__DIR__, "structures_bitvector.jl"))
+
+include(joinpath(@__DIR__, "algorithm", "eclat.jl"))
+include(joinpath(@__DIR__, "algorithm", "eclat_bitvector.jl"))
+
+include(joinpath(@__DIR__, "data_loader.jl"))
+include(joinpath(@__DIR__, "output.jl"))
+
 
 function main(args)
-    if length(args) != 3
+
+    # Kiểm tra số lượng tham số
+    if length(args) < 3 || length(args) > 4
         println("Usage:")
-        println("julia --project=. src/main.jl <input_file> <minsup> <output_file>")
+        println("julia --project=. src/main.jl <input_file> <minsup> <output_file> [algorithm]")
+        println()
+        println("Algorithms:")
+        println("  vector     Eclat using Vector{Int} (default)")
+        println("  bitvector  Eclat using BitVector")
         return
     end
 
@@ -14,8 +26,19 @@ function main(args)
     minsup = tryparse(Int, args[2])
     output_file = args[3]
 
+    # Thuật toán mặc định
+    algorithm = length(args) == 4 ? lowercase(args[4]) : "vector"
+
+    # Kiểm tra minsup
     if minsup === nothing || minsup < 1
         println("Error: minsup must be a positive integer.")
+        return
+    end
+
+    # Kiểm tra thuật toán
+    if !(algorithm in ["vector", "bitvector"])
+        println("Error: Unknown algorithm '$algorithm'.")
+        println("Available algorithms: vector, bitvector")
         return
     end
 
@@ -23,17 +46,27 @@ function main(args)
         # Đọc dữ liệu
         transactions = load_spmf_file(input_file)
 
-        # Xây dựng Vertical Database
-        db = build_vertical_db(transactions)
+        # Chạy thuật toán được lựa chọn
+        if algorithm == "vector"
 
-        # Chạy thuật toán Eclat
-        results = eclat(db, minsup)
+            db = build_vertical_db(transactions)
+            results = eclat(db, minsup)
+            ntransactions = db.ntransactions
+
+        else
+
+            db = build_vertical_bit_db(transactions)
+            results = eclat_bitvector(db, minsup)
+            ntransactions = db.ntransactions
+
+        end
 
         # Xuất kết quả
         write_spmf_output(output_file, results)
 
         println("Mining completed successfully!")
-        println("Transactions: ", db.ntransactions)
+        println("Algorithm: ", algorithm)
+        println("Transactions: ", ntransactions)
         println("Minimum support: ", minsup)
         println("Frequent itemsets: ", length(results))
         println("Output file: ", output_file)
