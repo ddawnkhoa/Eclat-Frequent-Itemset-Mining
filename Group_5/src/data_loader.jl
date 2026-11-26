@@ -23,7 +23,7 @@ function load_spmf_file(filepath::String)
             for token in tokens
                 item = tryparse(Int, token)
 
-                if item === nothing || item <= 0
+                if item === nothing || item < 0
                     throw(ArgumentError(
                         "Invalid item at line $line_number: $token"
                     ))
