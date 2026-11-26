@@ -1,16 +1,13 @@
+
 using Statistics
 using Printf
 
 include("../src/structures.jl")
 include("../src/structures_bitvector.jl")
-
 include("../src/algorithm/eclat.jl")
 include("../src/algorithm/eclat_bitvector.jl")
-
 include("../src/data_loader.jl")
 
-
-# Chuyển kết quả về Dict để so sánh
 function result_to_dict(results)
     return Dict(
         Tuple(itemset) => support
@@ -18,20 +15,18 @@ function result_to_dict(results)
     )
 end
 
-
-# Đo thời gian và bộ nhớ trung vị qua nhiều lần chạy
+# Đo runtime và tổng lượng bộ nhớ cấp phát
 function measure_algorithm(f; repetitions=10)
-
-    # Warm-up
-    f()
+    f()  # Warm-up
 
     times = Float64[]
     memories = Int[]
 
     for _ in 1:repetitions
         GC.gc()
-
         push!(times, @elapsed f())
+
+        GC.gc()
         push!(memories, @allocated f())
     end
 
@@ -41,16 +36,14 @@ function measure_algorithm(f; repetitions=10)
     )
 end
 
-
 function benchmark_optimization(filepath, minsup; repetitions=10)
-
     transactions = load_spmf_file(filepath)
 
-    # Xây dựng hai cấu trúc dữ liệu
+    # Xây dựng cấu trúc dữ liệu
     db_vector = build_vertical_db(transactions)
     db_bitvector = build_vertical_bit_db(transactions)
 
-    # Kiểm tra tính đúng đắn trước khi đo
+    # Kiểm tra correctness
     result_vector = eclat(db_vector, minsup)
     result_bitvector = eclat_bitvector(db_bitvector, minsup)
 
@@ -58,7 +51,7 @@ function benchmark_optimization(filepath, minsup; repetitions=10)
         error("Results do not match: $(basename(filepath))")
     end
 
-    # Đo riêng thời gian khai thác
+    # Đo riêng thời gian và bộ nhớ của thuật toán
     vector_metrics = measure_algorithm(
         () -> eclat(db_vector, minsup);
         repetitions=repetitions
@@ -74,51 +67,89 @@ function benchmark_optimization(filepath, minsup; repetitions=10)
     memory_ratio = bitvector_metrics.memory == 0 ?
         NaN : vector_metrics.memory / bitvector_metrics.memory
 
-    println("\n========================================")
-    println("Dataset: ", basename(filepath))
-    println("Transactions: ", length(transactions))
-    println("Minsup: ", minsup)
-    println("Frequent itemsets: ", length(result_vector))
-    println("Correctness: PASS")
-
-    println("\nVector:")
-    @printf("Runtime: %.6f seconds\n", vector_metrics.runtime)
-    @printf("Allocated memory: %.2f KB\n",
-        vector_metrics.memory / 1024)
-
-    println("\nBitVector:")
-    @printf("Runtime: %.6f seconds\n", bitvector_metrics.runtime)
-    @printf("Allocated memory: %.2f KB\n",
-        bitvector_metrics.memory / 1024)
-
-    @printf("\nSpeedup: %.3fx\n", speedup)
-    @printf("Memory ratio: %.3fx\n", memory_ratio)
-
-    if speedup > 1
-        println("Runtime improvement: BitVector is faster.")
-    elseif speedup < 1
-        println("Runtime improvement: Vector is faster.")
-    else
-        println("Runtime: Equal.")
-    end
-
-    println("========================================")
+    return (
+        Dataset = basename(filepath),
+        Transactions = length(transactions),
+        MinSup = minsup,
+        ItemsetCount = length(result_vector),
+        Correctness = "PASS",
+        VectorRuntimeSec = vector_metrics.runtime,
+        BitVectorRuntimeSec = bitvector_metrics.runtime,
+        Speedup = speedup,
+        VectorAllocatedMB = vector_metrics.memory / 1024^2,
+        BitVectorAllocatedMB = bitvector_metrics.memory / 1024^2,
+        MemoryRatio = memory_ratio
+    )
 end
 
-
-# Thực hiện benchmark
+# Các bộ dữ liệu toy
 project_dir = dirname(@__DIR__)
 data_dir = joinpath(project_dir, "data", "toy")
 
 datasets = [
     ("normal.txt", 2),
+    ("empty.txt", 1),
     ("singleton_only.txt", 3),
     ("no_frequent.txt", 3),
-    ("multi_itemset.txt", 3)
+    ("multi_itemset.txt", 2)
 ]
+
+results = []
 
 for (filename, minsup) in datasets
     filepath = joinpath(data_dir, filename)
 
-    benchmark_optimization(filepath, minsup)
+    metrics = benchmark_optimization(
+        filepath, minsup;
+        repetitions=10
+    )
+
+    push!(results, metrics)
+
+    println("\nDataset: ", metrics.Dataset)
+    println("Correctness: ", metrics.Correctness)
+    println("Frequent itemsets: ", metrics.ItemsetCount)
+
+    @printf("Vector runtime: %.6f s\n", metrics.VectorRuntimeSec)
+    @printf("BitVector runtime: %.6f s\n", metrics.BitVectorRuntimeSec)
+    @printf("Speedup: %.3fx\n", metrics.Speedup)
+
+    @printf("Vector allocated: %.4f MB\n", metrics.VectorAllocatedMB)
+    @printf("BitVector allocated: %.4f MB\n", metrics.BitVectorAllocatedMB)
+    @printf("Memory ratio: %.3fx\n", metrics.MemoryRatio)
 end
+
+# Xuất CSV
+output_dir = joinpath(project_dir, "results", "optimization")
+mkpath(output_dir)
+
+output_file = joinpath(output_dir, "vector_bitvector_optimization.csv")
+
+columns = [
+    "Dataset", "Transactions", "MinSup", "ItemsetCount",
+    "Correctness", "VectorRuntimeSec", "BitVectorRuntimeSec",
+    "Speedup", "VectorAllocatedMB", "BitVectorAllocatedMB",
+    "MemoryRatio"
+]
+
+open(output_file, "w") do io
+    println(io, join(columns, ","))
+
+    for r in results
+        println(io, join([
+            r.Dataset,
+            r.Transactions,
+            r.MinSup,
+            r.ItemsetCount,
+            r.Correctness,
+            r.VectorRuntimeSec,
+            r.BitVectorRuntimeSec,
+            r.Speedup,
+            r.VectorAllocatedMB,
+            r.BitVectorAllocatedMB,
+            r.MemoryRatio
+        ], ","))
+    end
+end
+
+println("\nSaved benchmark results: ", output_file)
