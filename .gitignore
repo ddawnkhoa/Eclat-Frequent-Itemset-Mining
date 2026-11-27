@@ -8,12 +8,6 @@ Manifest.toml
 *.log
 *.tmp
 
-# Benchmark datasets - không commit dữ liệu lớn
-data/benchmark/*
-
-# Generated results
-results/
-*.csv
 
 # OS
 .DS_Store
