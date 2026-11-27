@@ -1,5 +1,4 @@
 # tests/benchmark_runtime.ps1
-# Chạy tại thư mục gốc project
 
 $datasets = @(
     # "chess.txt"
@@ -8,7 +7,6 @@ $datasets = @(
     "T10I4D100K.txt"
 )
 
-# MinSup theo phần trăm
 $percentages = @(5,4,3,2,1)
 $repeats = 3
 

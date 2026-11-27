@@ -1,11 +1,72 @@
-
 # tests/create_transaction_length_datasets.ps1
-# Tao synthetic datasets cho benchmark transaction length.
-# Chay duoc tu bat ky thu muc nao.
-
+# Generate synthetic datasets for benchmark transaction length.
 $ErrorActionPreference = "Stop"
+using Random
 
 # tests/ -> project root
+const PROJECT_ROOT = normpath(joinpath(@__DIR__, ".."))
+
+const OUTPUT_DIR = joinpath(
+    PROJECT_ROOT,
+    "data",
+    "benchmark",
+    "transaction_length",
+)
+
+const TRANSACTION_COUNT = 10000
+const ITEM_UNIVERSE = 100
+const LENGTHS = [5, 10, 15, 20, 25]
+const SEED = 12345
+
+function create_dataset(length::Int)
+    if length < 1 || length > ITEM_UNIVERSE
+        error("Transaction length khong hop le: $length")
+    end
+
+    output_file = joinpath(
+        OUTPUT_DIR,
+        "synthetic_L$(length).txt",
+    )
+
+    # Khoi tao RNG rieng cho moi dataset,
+    rng = MersenneTwister(SEED)
+
+    open(output_file, "w") do writer
+        for _ in 1:TRANSACTION_COUNT
+            # Lay L item khong trung nhau tu 1..100.
+            # randperm tao hoan vi ngau nhien.
+            items = randperm(rng, ITEM_UNIVERSE)[1:length]
+
+            # Sap xep item tang dan.
+            sort!(items)
+
+            # Ghi item cach nhau bang space.
+            println(writer, join(items, " "))
+        end
+    end
+
+    println("Saved: ", output_file)
+end
+
+function main()
+    mkpath(OUTPUT_DIR)
+
+    println("Project root: ", PROJECT_ROOT)
+    println("Output directory: ", OUTPUT_DIR)
+
+    for length in LENGTHS
+        println()
+        println("Creating dataset: L=", length)
+
+        create_dataset(length)
+    end
+
+    println()
+    println("All synthetic datasets created.")
+end
+
+main()
+
 $projectRoot = Split-Path -Parent $PSScriptRoot
 
 $outputDir = Join-Path $projectRoot "data\benchmark\transaction_length"
