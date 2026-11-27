@@ -1,0 +1,21 @@
+TransactionID,Accession,Organism,SequenceLength,UniqueKmerCount
+1,"P00441","Homo sapiens",154,149
+2,"P00797","Homo sapiens",406,384
+3,"P01034","Homo sapiens",146,141
+4,"P01308","Homo sapiens",110,102
+5,"P01579","Homo sapiens",166,164
+6,"P02649","Homo sapiens",317,284
+7,"P02671","Homo sapiens",866,732
+8,"P02768","Homo sapiens",609,552
+9,"P04156","Homo sapiens",253,209
+10,"P04406","Homo sapiens",335,315
+11,"P06213","Homo sapiens",1382,1193
+12,"P06858","Homo sapiens",475,447
+13,"P08684","Homo sapiens",503,482
+14,"P0DTE8","Homo sapiens",511,490
+15,"P42574","Homo sapiens",277,272
+16,"P60709","Homo sapiens",375,362
+17,"P61626","Homo sapiens",148,145
+18,"P68871","Homo sapiens",147,142
+19,"Q99836","Homo sapiens",296,275
+20,"Q9NRJ2","Homo sapiens",163,157
