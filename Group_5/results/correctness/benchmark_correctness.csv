@@ -1,0 +1,5 @@
+dataset,minsup_count,julia_itemsets,spmf_itemsets,exact_match
+chess,1598,1272932,1272932,PASS
+mushroom,4062,153,153,PASS
+retail,44081,1,1,PASS
+T10I4D100K,5000,10,10,PASS
