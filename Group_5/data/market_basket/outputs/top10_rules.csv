@@ -1,0 +1,11 @@
+Rank,Antecedent,Consequent,Support,Confidence,Lift
+1,"{citrus fruit, other vegetables}","{root vegetables}",0.0104,0.3592,3.295
+2,"{tropical fruit, other vegetables}","{root vegetables}",0.0123,0.3428,3.1448
+3,"{beef}","{root vegetables}",0.0174,0.3314,3.0404
+4,"{citrus fruit, root vegetables}","{other vegetables}",0.0104,0.5862,3.0296
+5,"{tropical fruit, root vegetables}","{other vegetables}",0.0123,0.5845,3.021
+6,"{whole milk, other vegetables}","{root vegetables}",0.0232,0.3098,2.8421
+7,"{whole milk, curd}","{yogurt}",0.0101,0.3852,2.7614
+8,"{rolls/buns, root vegetables}","{other vegetables}",0.0122,0.5021,2.5949
+9,"{yogurt, root vegetables}","{other vegetables}",0.0129,0.5,2.5841
+10,"{tropical fruit, whole milk}","{yogurt}",0.0151,0.3582,2.5675
