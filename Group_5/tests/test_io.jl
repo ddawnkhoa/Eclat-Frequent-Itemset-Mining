@@ -10,7 +10,7 @@ include("../src/algorithm/eclat.jl")
     # Xác định đường dẫn dựa trên thư mục gốc dự án
     project_dir = dirname(@__DIR__)
 
-    input_path = joinpath(project_dir, "data", "toy", "sample.txt")
+    input_path = joinpath(project_dir, "data", "toy", "normal.txt")
     output_path = joinpath(project_dir, "data", "toy", "test_output.txt")
 
     transactions = load_spmf_file(input_path)
