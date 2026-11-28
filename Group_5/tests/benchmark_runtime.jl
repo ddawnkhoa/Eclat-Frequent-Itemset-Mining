@@ -1,25 +1,41 @@
-# tests/benchmark_runtime.ps1
 
-$datasets = @(
-    # "chess.txt"
-    # "mushroom.txt"
-    # "retail.txt"
+# tests/benchmark_runtime.jl
+#
+# Run from project root:
+# julia --project=. tests/benchmark_runtime.jl
+
+using Statistics
+using Printf
+
+# --------------------------------------------------
+# 1. Configuration
+# --------------------------------------------------
+
+datasets = [
+    # "chess.txt",
+    # "mushroom.txt",
+    # "retail.txt",
     "T10I4D100K.txt"
-)
+]
 
-$percentages = @(5,4,3,2,1)
-$repeats = 3
+percentages = [5, 4, 3, 2, 1]
+repeats = 3
 
-$inputDir = "data/benchmark"
-$outputDir = "data/benchmark"
-$resultsDir = "results/runtime"
+PROJECT_DIR = dirname(@__DIR__)
 
-New-Item -ItemType Directory -Force $resultsDir | Out-Null
+input_dir = joinpath(PROJECT_DIR, "data", "benchmark")
+output_dir = joinpath(PROJECT_DIR, "data", "benchmark")
+results_dir = joinpath(PROJECT_DIR, "results", "runtime")
 
-$csvFile = Join-Path $resultsDir "julia_runtime.csv"
+mkpath(results_dir)
 
-# Schema CSV thống nhất với SPMF
-$columns = @(
+csv_file = joinpath(results_dir, "julia_runtime.csv")
+
+# --------------------------------------------------
+# 2. CSV schema
+# --------------------------------------------------
+
+columns = [
     "Dataset",
     "Transactions",
     "MinsupPercent",
@@ -30,131 +46,173 @@ $columns = @(
     "Run2Sec",
     "Run3Sec",
     "MedianSec"
-)
+]
 
-# Kiểm tra header nếu CSV đã tồn tại
-if (Test-Path $csvFile) {
-    $existingHeader = (Get-Content $csvFile -TotalCount 1).Trim()
-    $expectedHeader = ($columns | ForEach-Object {
-        '"' + $_ + '"'
-    }) -join ","
+# --------------------------------------------------
+# 3. Helper functions
+# --------------------------------------------------
 
-    if ($existingHeader -ne $expectedHeader) {
-        Write-Error "CSV hiện tại không đúng schema mới."
-        Write-Error "Hãy đổi tên hoặc xóa file: $csvFile"
-        exit 1
-    }
-}
+function count_transactions(filepath::String)
+    transaction_count = 0
 
-$results = @()
+    for line in eachline(filepath)
+        stripped = strip(line)
 
-foreach ($dataset in $datasets) {
-
-    $inputFile = Join-Path $inputDir $dataset
-    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($dataset)
-
-    if (-not (Test-Path $inputFile)) {
-        Write-Warning "Dataset not found: $inputFile"
-        continue
-    }
-
-    # Đếm số giao dịch
-    $N = (Get-Content $inputFile | Where-Object {
-        $_.Trim() -ne "" -and $_ -notmatch '^\s*[@#%]'
-    }).Count
-
-    Write-Host "`nDataset: $dataset, Transactions: $N"
-
-    foreach ($percent in $percentages) {
-
-        # Tính minsup count để lưu vào CSV
-        $minsup = [math]::Ceiling($N * $percent / 100)
-
-        # Output file riêng cho từng dataset và minsup
-        $outputFile = Join-Path $outputDir "${baseName}_julia_${percent}.txt"
-
-        $times = @()
-
-        for ($run = 1; $run -le $repeats; $run++) {
-
-            Write-Host "MinSup $percent% (count=$minsup), run $run/$repeats"
-
-            $elapsed = (Measure-Command {
-                & julia --project=. src/main.jl `
-                    $inputFile $percent $outputFile bitvector
-            }).TotalSeconds
-
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warning "Julia failed: $dataset minsup=$percent run=$run"
-                continue
-            }
-
-            $times += [double]$elapsed
-        }
-
-        if ($times.Count -eq 0) {
-            Write-Warning "No successful runs for $dataset minsup=$percent"
+        if isempty(stripped) || occursin(r"^[@#%]", stripped)
             continue
-        }
+        end
 
-        # Tính median runtime
-        $sortedTimes = @($times | Sort-Object)
-        $count = $sortedTimes.Count
+        transaction_count += 1
+    end
 
-        if ($count % 2 -eq 1) {
-            $medianTime = $sortedTimes[[int](($count - 1) / 2)]
-        }
-        else {
-            $middle1 = $sortedTimes[($count / 2) - 1]
-            $middle2 = $sortedTimes[$count / 2]
-            $medianTime = ($middle1 + $middle2) / 2
-        }
+    return transaction_count
+end
 
-        # Lấy thời gian từng lần chạy
-        $run1 = if ($times.Count -ge 1) { $times[0] } else { $null }
-        $run2 = if ($times.Count -ge 2) { $times[1] } else { $null }
-        $run3 = if ($times.Count -ge 3) { $times[2] } else { $null }
+function write_csv_row(file, row)
+    escaped_row = [
+        "\"" * replace(value, "\"" => "\"\"") * "\""
+        for value in row
+    ]
 
-        # Tạo dòng kết quả
-        $results += [PSCustomObject]@{
-            Dataset       = $baseName
-            Transactions  = $N
-            MinsupPercent = $percent
-            MinsupCount   = $minsup
-            Algorithm     = "Julia BitVector"
-            Repeats       = $times.Count
-            Run1Sec       = if ($null -ne $run1) { [math]::Round($run1, 4) } else { $null }
-            Run2Sec       = if ($null -ne $run2) { [math]::Round($run2, 4) } else { $null }
-            Run3Sec       = if ($null -ne $run3) { [math]::Round($run3, 4) } else { $null }
-            MedianSec     = [math]::Round($medianTime, 4)
-        }
+    println(file, join(escaped_row, ","))
+end
 
-        Write-Host "Median runtime: $([math]::Round($medianTime, 4)) seconds"
-    }
-}
+# --------------------------------------------------
+# 4. Check existing CSV
+# --------------------------------------------------
 
-# Ghi CSV: append nếu đã tồn tại, tạo mới nếu chưa tồn tại
-if ($results.Count -gt 0) {
+if isfile(csv_file)
+    println("Existing CSV found. Results will be appended.")
+else
+    println("CSV file does not exist. A new file will be created.")
+end
 
-    $orderedResults = $results | Select-Object $columns
+# --------------------------------------------------
+# 5. Benchmark
+# --------------------------------------------------
 
-    if (Test-Path $csvFile) {
+results = Vector{Vector{String}}()
 
-        $orderedResults |
-            Export-Csv $csvFile -NoTypeInformation -Encoding UTF8 -Append
+julia_command = Base.julia_cmd()
 
-        Write-Host "`nAppended results to $csvFile"
+cd(PROJECT_DIR) do
 
-    }
-    else {
+    for dataset in datasets
 
-        $orderedResults |
-            Export-Csv $csvFile -NoTypeInformation -Encoding UTF8
+        input_file = joinpath(input_dir, dataset)
+        base_name = splitext(dataset)[1]
 
-        Write-Host "`nCreated results file: $csvFile"
-    }
+        if !isfile(input_file)
+            @warn "Dataset not found: $input_file"
+            continue
+        end
 
-}
-else {
-    Write-Warning "No results to write."
-}
+        # Count transactions
+        N = count_transactions(input_file)
+
+        println("\nDataset: $dataset, Transactions: $N")
+
+        for percent in percentages
+
+            # Calculate minimum support count
+            minsup = ceil(Int, N * percent / 100)
+
+            # Output file
+            output_file = joinpath(
+                output_dir,
+                "$(base_name)_julia_$(percent).txt"
+            )
+
+            times = Float64[]
+
+            for run_number in 1:repeats
+
+                println(
+                    "MinSup $percent% (count=$minsup), " *
+                    "run $run_number/$repeats"
+                )
+
+                # Measure the entire Julia process
+                command = `$julia_command --project=. src/main.jl $input_file $percent $output_file bitvector`
+
+                start_time = time_ns()
+
+                try
+                    run(command)
+
+                    elapsed = (time_ns() - start_time) / 1e9
+
+                    push!(times, elapsed)
+
+                    @printf("Runtime: %.4f seconds\n", elapsed)
+
+                catch err
+                    @warn "Julia failed: $dataset minsup=$percent run=$run_number" exception=(err, catch_backtrace())
+                end
+            end
+
+            if isempty(times)
+                @warn "No successful runs for $dataset minsup=$percent"
+                continue
+            end
+
+            # Calculate median runtime
+            median_time = median(times)
+
+            # Individual run times
+            run_times = [
+                i <= length(times) ?
+                    @sprintf("%.4f", times[i]) : ""
+                for i in 1:3
+            ]
+
+            # Create result row
+            row = [
+                base_name,
+                string(N),
+                string(percent),
+                string(minsup),
+                "Julia BitVector",
+                string(length(times)),
+                run_times[1],
+                run_times[2],
+                run_times[3],
+                @sprintf("%.4f", median_time)
+            ]
+
+            push!(results, row)
+
+            @printf(
+                "Median runtime: %.4f seconds\n",
+                median_time
+            )
+        end
+    end
+end
+
+# --------------------------------------------------
+# 6. Write CSV
+# --------------------------------------------------
+
+if !isempty(results)
+
+    write_header = !isfile(csv_file) || filesize(csv_file) == 0
+
+    open(csv_file, "a") do file
+
+        if write_header
+            write_csv_row(file, columns)
+        end
+
+        for row in results
+            write_csv_row(file, row)
+        end
+    end
+
+    println("\nResults appended to: $csv_file")
+
+else
+    @warn "No results to write."
+end
+
+println("\n========== BENCHMARK COMPLETED ==========")

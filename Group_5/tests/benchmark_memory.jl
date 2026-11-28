@@ -1,10 +1,14 @@
 
 # tests/benchmark_memory.jl
+#
 # Run from project root:
 # julia --project=. tests/benchmark_memory.jl
 #
 # Measure Peak Working Set (RAM peak) of Julia subprocesses
 # for Vector and BitVector algorithms on Windows.
+#
+# This script follows the measurement procedure of
+# benchmark_memory.ps1.
 
 using Statistics
 using Printf
@@ -25,7 +29,7 @@ const RESULTS_DIR = joinpath(PROJECT_ROOT, "results", "memory")
 const CSV_FILE = joinpath(RESULTS_DIR, "memory_runtime.csv")
 
 const REPEATS = 3
-const POLL_INTERVAL = 0.05  # 50 ms
+const POLL_INTERVAL = 0.05
 
 # MinSup trung binh trong cac day benchmark
 const TEST_CASES = [
@@ -57,13 +61,10 @@ const COLUMNS = [
 
 mkpath(RESULTS_DIR)
 
-
 # --------------------------------------------------
-# 2. Windows API: get process Peak Working Set
+# 2. Windows API: Peak Working Set
 # --------------------------------------------------
 
-# Windows PROCESS_MEMORY_COUNTERS structure.
-# SIZE_T is UInt on the current Windows architecture.
 struct PROCESS_MEMORY_COUNTERS
     cb::UInt32
     PageFaultCount::UInt32
@@ -77,49 +78,38 @@ struct PROCESS_MEMORY_COUNTERS
     PeakPagefileUsage::UInt
 end
 
-function get_peak_working_set_bytes(pid::Integer)
-    PROCESS_QUERY_INFORMATION = UInt32(0x0400)
+const PROCESS_QUERY_INFORMATION = UInt32(0x0400)
+const PROCESS_VM_READ = UInt32(0x0010)
+
+function open_process_handle(pid::Integer)
 
     handle = ccall(
         (:OpenProcess, "kernel32"),
         Ptr{Cvoid},
         (UInt32, Int32, UInt32),
-        PROCESS_QUERY_INFORMATION,
+        PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
         0,
         UInt32(pid),
     )
 
     if handle == C_NULL
-        return 0.0
+        error_code = ccall(
+            (:GetLastError, "kernel32"),
+            UInt32,
+            (),
+        )
+
+        error(
+            "OpenProcess failed. PID=$pid, Windows error=$error_code"
+        )
     end
 
-    try
-        counters = Ref(
-            PROCESS_MEMORY_COUNTERS(
-                UInt32(sizeof(PROCESS_MEMORY_COUNTERS)),
-                UInt32(0),
-                UInt(0), UInt(0),
-                UInt(0), UInt(0),
-                UInt(0), UInt(0),
-                UInt(0), UInt(0),
-            )
-        )
+    return handle
+end
 
-        success = ccall(
-            (:GetProcessMemoryInfo, "psapi"),
-            Int32,
-            (Ptr{Cvoid}, Ref{PROCESS_MEMORY_COUNTERS}, UInt32),
-            handle,
-            counters,
-            UInt32(sizeof(PROCESS_MEMORY_COUNTERS)),
-        )
+function close_process_handle(handle::Ptr{Cvoid})
 
-        if success == 0
-            return 0.0
-        end
-
-        return Float64(counters[].PeakWorkingSetSize)
-    finally
+    if handle != C_NULL
         ccall(
             (:CloseHandle, "kernel32"),
             Int32,
@@ -127,55 +117,144 @@ function get_peak_working_set_bytes(pid::Integer)
             handle,
         )
     end
+
+    return nothing
 end
 
+function get_peak_working_set_bytes(handle::Ptr{Cvoid})
+
+    counters = Ref(
+        PROCESS_MEMORY_COUNTERS(
+            UInt32(sizeof(PROCESS_MEMORY_COUNTERS)),
+            UInt32(0),
+            UInt(0), UInt(0),
+            UInt(0), UInt(0),
+            UInt(0), UInt(0),
+            UInt(0), UInt(0),
+        )
+    )
+
+    success = ccall(
+        (:GetProcessMemoryInfo, "psapi"),
+        Int32,
+        (Ptr{Cvoid}, Ref{PROCESS_MEMORY_COUNTERS}, UInt32),
+        handle,
+        counters,
+        UInt32(sizeof(PROCESS_MEMORY_COUNTERS)),
+    )
+
+    if success == 0
+        error_code = ccall(
+            (:GetLastError, "kernel32"),
+            UInt32,
+            (),
+        )
+
+        error(
+            "GetProcessMemoryInfo failed. Windows error=$error_code"
+        )
+    end
+
+    return Float64(counters[].PeakWorkingSetSize)
+end
 
 # --------------------------------------------------
-# 3. Run Julia subprocess and monitor peak RAM
+# 3. Run Julia subprocess and measure peak RAM
 # --------------------------------------------------
 
 function run_and_measure_peak(command::Cmd)
+
     process = run(command; wait = false)
 
     peak_bytes = 0.0
+    handle = C_NULL
 
-    while process_running(process)
-        try
-            current_peak = get_peak_working_set_bytes(process.pid)
+    # Get PID using Julia's process API.
+    pid = getpid(process)
 
-            if current_peak > peak_bytes
-                peak_bytes = current_peak
+    try
+        # Open process handle immediately after starting.
+        # Keep the handle until the subprocess has exited.
+        handle = open_process_handle(pid)
+
+        # Monitor memory while the subprocess is running.
+        while process_running(process)
+
+            try
+                current_peak = get_peak_working_set_bytes(handle)
+
+                if current_peak > peak_bytes
+                    peak_bytes = current_peak
+                end
+
+            catch err
+                @warn "Cannot read process memory while running" pid=pid exception=err
             end
-        catch
-            # Process may exit while querying its memory.
+
+            sleep(POLL_INTERVAL)
         end
 
-        sleep(POLL_INTERVAL)
+        # Wait for the subprocess to finish.
+        wait(process)
+
+        # Read Peak Working Set one final time after exit,
+        # matching PowerShell's final Refresh() call.
+        try
+            final_peak = get_peak_working_set_bytes(handle)
+
+            if final_peak > peak_bytes
+                peak_bytes = final_peak
+            end
+
+        catch err
+            @warn "Cannot read final process memory" pid=pid exception=err
+        end
+
+    catch err
+        @warn "Memory measurement failed" pid=pid exception=err
+
+        if process_running(process)
+            try
+                wait(process)
+            catch
+            end
+        end
+
+    finally
+        close_process_handle(handle)
     end
 
-    wait(process)
-
     if process.exitcode != 0
-        return (success = false, peak_mb = 0.0, exitcode = process.exitcode)
+        return (
+            success = false,
+            peak_mb = 0.0,
+            exitcode = process.exitcode,
+        )
     end
 
     if peak_bytes <= 0
-        return (success = false, peak_mb = 0.0, exitcode = process.exitcode)
+        return (
+            success = false,
+            peak_mb = 0.0,
+            exitcode = process.exitcode,
+        )
     end
 
     peak_mb = round(peak_bytes / 1024^2; digits = 2)
 
-    return (success = true, peak_mb = peak_mb, exitcode = process.exitcode)
+    return (
+        success = true,
+        peak_mb = peak_mb,
+        exitcode = process.exitcode,
+    )
 end
-
 
 # --------------------------------------------------
 # 4. CSV helpers
 # --------------------------------------------------
 
-# Quote every field to keep CSV format consistent with
-# PowerShell Export-Csv output.
 function csv_escape(value)
+
     if value === missing || value === nothing
         text = ""
     else
@@ -183,6 +262,7 @@ function csv_escape(value)
     end
 
     text = replace(text, "\"" => "\"\"")
+
     return "\"" * text * "\""
 end
 
@@ -190,35 +270,68 @@ function csv_line(values)
     return join(csv_escape.(values), ",")
 end
 
+function parse_csv_header(line::String)
+
+    normalized = replace(line, "\ufeff" => "")
+
+    fields = split(normalized, ",")
+
+    return [
+        strip(replace(strip(field), "\"" => ""))
+        for field in fields
+    ]
+end
+
 function validate_csv_header(path::String)
-    expected_header = csv_line(COLUMNS)
 
-    if isfile(path)
-        existing_header = strip(first(readlines(path)))
-
-        if existing_header != expected_header
-            error(
-                "CSV has a different schema. Rename or remove this file: $path"
-            )
-        end
+    if !isfile(path) || filesize(path) == 0
+        println("CSV file does not exist or is empty. A new CSV will be created.")
+        return
     end
+
+    lines = readlines(path)
+
+    if isempty(lines)
+        return
+    end
+
+    existing_columns = parse_csv_header(lines[1])
+
+    if existing_columns != COLUMNS
+
+        println("\nExpected columns:")
+        println(COLUMNS)
+
+        println("\nExisting columns:")
+        println(existing_columns)
+
+        error("CSV has a different schema: $path")
+    end
+
+    println("Existing CSV schema is valid.")
 end
 
 function append_csv_rows(path::String, rows)
-    file_exists = isfile(path)
+
+    needs_header = !isfile(path) || filesize(path) == 0
 
     open(path, "a") do file
-        if !file_exists
+
+        if needs_header
             println(file, csv_line(COLUMNS))
         end
 
         for row in rows
-            values = [getproperty(row, Symbol(column)) for column in COLUMNS]
+
+            values = [
+                getproperty(row, Symbol(column))
+                for column in COLUMNS
+            ]
+
             println(file, csv_line(values))
         end
     end
 end
-
 
 # --------------------------------------------------
 # 5. Benchmark
@@ -228,7 +341,10 @@ validate_csv_header(CSV_FILE)
 
 results = NamedTuple[]
 
+julia_command = Base.julia_cmd()
+
 for case in TEST_CASES
+
     dataset = case.dataset
     N = case.transactions
     percent = case.minsup_percent
@@ -245,6 +361,7 @@ for case in TEST_CASES
     println("Dataset: $dataset | MinSup: $percent% | Count: $minsup_count")
 
     for algorithm in ALGORITHMS
+
         algorithm_name = algorithm.name
         algorithm_cli = algorithm.cli
 
@@ -256,14 +373,19 @@ for case in TEST_CASES
         peak_values_mb = Float64[]
 
         for run_number in 1:REPEATS
+
             println("$algorithm_name - run $run_number/$REPEATS")
 
-            command = `julia --project=$(PROJECT_ROOT) $(joinpath(PROJECT_ROOT, "src", "main.jl")) $input_file $percent $output_file $algorithm_cli`
+            main_file = joinpath(PROJECT_ROOT, "src", "main.jl")
+
+            command = `$julia_command --project=$(PROJECT_ROOT) $main_file $input_file $percent $output_file $algorithm_cli`
 
             measurement = run_and_measure_peak(command)
 
             if !measurement.success
+
                 @warn "Julia failed or peak RAM unavailable" dataset algorithm_cli run_number exitcode=measurement.exitcode
+
                 continue
             end
 
@@ -273,14 +395,17 @@ for case in TEST_CASES
         end
 
         if isempty(peak_values_mb)
+
             @warn "No successful runs: $dataset / $algorithm_cli"
+
             continue
         end
 
+        # Calculate median and maximum
         median_peak = round(median(peak_values_mb); digits = 2)
         max_peak = round(maximum(peak_values_mb); digits = 2)
 
-        # Preserve the order of successful runs.
+        # Preserve the order of successful runs
         run1 = length(peak_values_mb) >= 1 ? peak_values_mb[1] : missing
         run2 = length(peak_values_mb) >= 2 ? peak_values_mb[2] : missing
         run3 = length(peak_values_mb) >= 3 ? peak_values_mb[3] : missing
@@ -306,16 +431,19 @@ for case in TEST_CASES
     end
 end
 
-
 # --------------------------------------------------
 # 6. Append results to CSV
 # --------------------------------------------------
 
 if !isempty(results)
+
     append_csv_rows(CSV_FILE, results)
 
     println()
     println("Appended results: $CSV_FILE")
+
 else
     @warn "No results to write."
 end
+
+println("\n========== MEMORY BENCHMARK COMPLETED ==========")

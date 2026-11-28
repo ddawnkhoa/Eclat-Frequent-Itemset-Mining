@@ -2,6 +2,11 @@
 using Statistics
 using Printf
 
+# --------------------------------------------------
+# 1. Project paths and benchmark settings
+# --------------------------------------------------
+
+# Resolve project root from this script's location.
 const PROJECT_ROOT = normpath(joinpath(@__DIR__, ".."))
 
 const BENCHMARK_DIR = joinpath(
@@ -23,6 +28,7 @@ const CSV_FILE = joinpath(
 )
 
 const LENGTHS = [5, 10, 15, 20, 25]
+
 const REPEATS = 3
 const MINSUP_PERCENT = 5
 
@@ -44,8 +50,12 @@ const COLUMNS = [
     "MaxSec",
 ]
 
-# Escape gia tri CSV.
+# --------------------------------------------------
+# 2. CSV helpers
+# --------------------------------------------------
+
 function csv_escape(value)
+
     if value === nothing || ismissing(value)
         return ""
     end
@@ -60,46 +70,92 @@ function csv_line(values)
     return join(csv_escape.(values), ",")
 end
 
-# Kiem tra schema CSV neu file da ton tai.
-function validate_csv_header(path)
+function parse_csv_header(line::String)
+
+    normalized = replace(line, "\ufeff" => "")
+    fields = split(normalized, ",")
+
+    return [
+        strip(replace(strip(field), "\"" => ""))
+        for field in fields
+    ]
+end
+
+# Validate existing CSV schema.
+function validate_csv_header(path::String)
+
     if !isfile(path)
         return
+    end
+
+    if filesize(path) == 0
+        error("CSV exists but is empty: $path")
     end
 
     lines = readlines(path)
 
     if isempty(lines)
-        error("CSV ton tai nhung rong: $path")
+        error("CSV exists but has no header: $path")
     end
 
-    existing_header = strip(first(lines))
-    expected_header = csv_line(COLUMNS)
+    existing_header = parse_csv_header(lines[1])
 
-    if existing_header != expected_header
+    if existing_header != COLUMNS
+
+        println("Expected columns:")
+        println(COLUMNS)
+
+        println("\nExisting columns:")
+        println(existing_header)
+
         error(
-            "CSV co schema khac. Hay doi ten/xoa file truoc khi chay: $path",
+            "CSV has a different schema. Rename or remove it before running: $path",
         )
     end
+
+    println("Existing CSV schema is valid.")
 end
 
-# Dem so dong giao dich trong dataset.
-# Moi dong duoc tinh la mot giao dich, giong PowerShell Get-Content.
-function count_transactions(path)
+# --------------------------------------------------
+# 3. Dataset helpers
+# --------------------------------------------------
+
+# Count all lines in the dataset.
+# Equivalent to PowerShell:
+# (Get-Content -Path $inputFile | Measure-Object -Line).Lines
+
+function count_transactions(path::String)
+
     count = 0
 
-    for _ in eachline(path)
-        count += 1
+    open(path, "r") do file
+        for _ in eachline(file)
+            count += 1
+        end
     end
 
     return count
 end
 
-# Chay main.jl va do thoi gian toan bo process.
-function run_and_measure(command)
+# --------------------------------------------------
+# 4. Runtime measurement
+# --------------------------------------------------
+
+# Run Julia main.jl and measure the entire subprocess runtime.
+#
+# Equivalent to PowerShell Stopwatch:
+# StartNew() -> execute Julia -> Stop()
+
+function run_and_measure(command::Cmd)
+
     start_time = time_ns()
 
     process = run(
-        pipeline(command, stdout = devnull, stderr = devnull);
+        pipeline(
+            command,
+            stdout = devnull,
+            stderr = devnull,
+        );
         wait = false,
     )
 
@@ -108,14 +164,52 @@ function run_and_measure(command)
     elapsed_seconds = (time_ns() - start_time) / 1e9
 
     if !success(process)
-        return false, elapsed_seconds
+
+        return (
+            success = false,
+            seconds = elapsed_seconds,
+            exitcode = process.exitcode,
+        )
     end
 
-    return true, elapsed_seconds
+    return (
+        success = true,
+        seconds = elapsed_seconds,
+        exitcode = process.exitcode,
+    )
 end
 
+# --------------------------------------------------
+# 5. Statistics
+# --------------------------------------------------
+
+# Calculate median using the same logic as PowerShell.
+function calculate_median(values::Vector{Float64})
+
+    sorted_values = sort(values)
+    count = length(sorted_values)
+
+    if isodd(count)
+
+        return sorted_values[(count + 1) ÷ 2]
+
+    else
+
+        left = sorted_values[count ÷ 2]
+        right = sorted_values[count ÷ 2 + 1]
+
+        return (left + right) / 2.0
+    end
+end
+
+# --------------------------------------------------
+# 6. Main benchmark
+# --------------------------------------------------
+
 function main()
+
     mkpath(RESULTS_DIR)
+
     validate_csv_header(CSV_FILE)
 
     results = Vector{Vector{Any}}()
@@ -124,6 +218,7 @@ function main()
     main_file = joinpath(PROJECT_ROOT, "src", "main.jl")
 
     for length_value in LENGTHS
+
         dataset_name = "Synthetic-L$(length_value)"
 
         input_file = joinpath(
@@ -132,23 +227,29 @@ function main()
         )
 
         if !isfile(input_file)
-            @warn "Khong tim thay dataset. Bo qua." input_file
+
+            @warn "Dataset not found. Skipping." input_file
+
             continue
         end
 
-        # Dem so giao dich thuc te.
+        # Count actual transactions.
         transaction_count = count_transactions(input_file)
 
         if transaction_count <= 0
-            @warn "Dataset rong. Bo qua." input_file
+
+            @warn "Empty dataset. Skipping." input_file
+
             continue
         end
 
+        # Calculate minimum support count.
         minsup_count = ceil(
             Int,
-            transaction_count * MINSUP_PERCENT / 100,
+            transaction_count * MINSUP_PERCENT / 100.0,
         )
 
+        # Output itemset file.
         output_file = joinpath(
             BENCHMARK_DIR,
             "result_L$(length_value)_bitvector.txt",
@@ -158,48 +259,66 @@ function main()
         println("==========================================")
         println(dataset_name)
         println("Transactions : $(transaction_count)")
-        println("Avg length  : $(length_value)")
-        println("MinSup      : $(MINSUP_PERCENT)% ($(minsup_count))")
-        println("Algorithm   : $(ALGORITHM_NAME)")
+        println("Avg length   : $(length_value)")
+        println("MinSup       : $(MINSUP_PERCENT)% ($(minsup_count))")
+        println("Algorithm    : $(ALGORITHM_NAME)")
         println("==========================================")
 
         times = Float64[]
 
+        # --------------------------------------------------
+        # Run benchmark
+        # --------------------------------------------------
+
         for run_number in 1:REPEATS
+
             println(
                 "$(ALGORITHM_NAME) - run ",
                 "$(run_number)/$(REPEATS)",
             )
 
-            command = `$(julia_executable) --project=$(PROJECT_ROOT) $(main_file) $(input_file) $(MINSUP_PERCENT) $(output_file) $(ALGORITHM_CLI)`
+            command = `$julia_executable --project=$(PROJECT_ROOT) $main_file $input_file $MINSUP_PERCENT $output_file $ALGORITHM_CLI`
 
-            succeeded, seconds = run_and_measure(command)
+            measurement = run_and_measure(command)
 
-            if !succeeded
-                @warn "Julia failed" dataset_name run_number
+            if !measurement.success
+
+                @warn "Julia failed: $(dataset_name) / run $(run_number)" exitcode=measurement.exitcode
+
                 continue
             end
 
-            rounded_seconds = round(seconds; digits = 4)
-            push!(times, rounded_seconds)
+            seconds = round(
+                measurement.seconds;
+                digits = 4,
+            )
 
-            @printf("Runtime: %.4f sec\n", rounded_seconds)
+            push!(times, seconds)
+
+            @printf("Runtime: %.4f sec\n", seconds)
         end
 
+        # --------------------------------------------------
+        # Calculate results
+        # --------------------------------------------------
+
         if isempty(times)
-            @warn "Khong co run thanh cong cho $(dataset_name)."
+
+            @warn "No successful runs for $(dataset_name)."
+
             continue
         end
 
-        median_seconds = median(times)
+        median_seconds = calculate_median(times)
         maximum_seconds = maximum(times)
 
-        # Neu run that bai, cot run tuong ung se de trong.
-        run_values = Any[nothing, nothing, nothing]
+        # Store successful run times in order.
+        # Failed runs are omitted, matching the PowerShell
+        # behavior of appending only successful measurements.
 
-        for i in 1:min(length(times), REPEATS)
-            run_values[i] = times[i]
-        end
+        run1 = length(times) >= 1 ? times[1] : nothing
+        run2 = length(times) >= 2 ? times[2] : nothing
+        run3 = length(times) >= 3 ? times[3] : nothing
 
         row = Any[
             dataset_name,
@@ -209,27 +328,41 @@ function main()
             minsup_count,
             ALGORITHM_NAME,
             length(times),
-            run_values[1],
-            run_values[2],
-            run_values[3],
+            run1,
+            run2,
+            run3,
             round(median_seconds; digits = 4),
             round(maximum_seconds; digits = 4),
         ]
 
         push!(results, row)
 
-        @printf("Median runtime: %.4f sec\n", median_seconds)
-        @printf("Maximum runtime: %.4f sec\n", maximum_seconds)
+        @printf(
+            "Median runtime: %.4f sec\n",
+            median_seconds,
+        )
+
+        @printf(
+            "Maximum runtime: %.4f sec\n",
+            maximum_seconds,
+        )
     end
 
+    # --------------------------------------------------
+    # 7. Write CSV
+    # --------------------------------------------------
+
     if isempty(results)
-        @warn "Khong co ket qua nao de ghi CSV."
+
+        @warn "No results to write to CSV."
+
         return
     end
 
-    file_exists = isfile(CSV_FILE)
+    file_exists = isfile(CSV_FILE) && filesize(CSV_FILE) > 0
 
-    open(CSV_FILE, file_exists ? "a" : "w") do file
+    open(CSV_FILE, "a") do file
+
         if !file_exists
             println(file, csv_line(COLUMNS))
         end
@@ -240,10 +373,12 @@ function main()
     end
 
     println()
-    println(
-        file_exists ? "Appended CSV: " : "Created CSV: ",
-        CSV_FILE,
-    )
+
+    if file_exists
+        println("Appended CSV: $CSV_FILE")
+    else
+        println("Created CSV: $CSV_FILE")
+    end
 
     println()
     println("Benchmark transaction length completed.")

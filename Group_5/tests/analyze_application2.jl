@@ -1,4 +1,3 @@
-
 # Analyze frequent itemsets and biological protein patterns.
 # Run: julia tests/analyze_application2.jl
 
@@ -146,9 +145,7 @@ function analyze_statistics(filepath, minsup)
         end
     end
 
-    println("\n====================================")
     println("MINIMUM SUPPORT: $minsup%")
-    println("====================================")
     println("Total frequent itemsets: $total")
 
     println("\nItemsets by length:")
